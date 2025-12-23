@@ -1,0 +1,120 @@
+name: Build foo_cuefixer
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        arch: [Win32, x64]
+        config: [Release]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Install missing Visual Studio components
+      run: |
+        Set-Location "C:\Program Files (x86)\Microsoft Visual Studio\Installer\"
+        $VsInstallPath = vswhere.exe -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+        [string]$ComponentsToAdd = @(
+          "Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL" # for windows-2022
+          "Microsoft.VisualStudio.Component.VC.14.29.16.11.ATL.ARM64" # for windows-11-arm
+        ) | ForEach-Object {"--add $_"}
+        $ArgumentList = ('modify', '--installPath', "`"$VsInstallPath`"", $ComponentsToAdd, '--quiet', '--norestart', '--nocache')
+        echo "vs_installer.exe $($ArgumentList -join ' ')"
+        # should be run twice for some reason
+        Start-Process -FilePath vs_installer.exe -ArgumentList $ArgumentList -Wait -PassThru -WindowStyle Hidden
+        Start-Process -FilePath vs_installer.exe -ArgumentList $ArgumentList -Wait -PassThru -WindowStyle Hidden
+
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: ${{ matrix.arch == 'Win32' && 'x86' || 'x64' }}
+
+    - name: Patch foobar2000 SDK projects to include WTL 10
+      shell: pwsh
+      run: |
+        $wtl = "${{ github.workspace }}\wtl\Include"
+    
+        $projects = @(
+          "sdk\foobar2000\foo_sample\foo_sample.vcxproj",
+          "sdk\foobar2000\helpers\foobar2000_sdk_helpers.vcxproj",
+          "sdk\foobar2000\foobar2000_component_client\foobar2000_component_client.vcxproj",
+          "sdk\libPPUI\libPPUI.vcxproj"
+        )
+
+        foreach ($proj in $projects) {
+          (Get-Content $proj) `
+            -replace '<AdditionalIncludeDirectories>([^<]*)</AdditionalIncludeDirectories>',
+                     "<AdditionalIncludeDirectories>$wtl;`$1</AdditionalIncludeDirectories>" |
+            Set-Content $proj
+        }
+
+    - name: Build foobar2000 SDK (Release)
+      shell: cmd
+      run: |
+        msbuild ^
+          "${{ github.workspace }}\sdk\foobar2000\foo_sample\foo_sample.sln" ^
+          /m ^
+          /p:Configuration=Release ^
+          /p:Platform=${{ matrix.arch == 'Win32' && 'x86' || 'x64' }}
+
+    - name: Build foobar2000 SDK (Debug)
+      shell: cmd
+      run: |
+        msbuild ^
+          "${{ github.workspace }}\sdk\foobar2000\foo_sample\foo_sample.sln" ^
+          /m ^
+          /p:Configuration=Debug ^
+          /p:Platform=${{ matrix.arch == 'Win32' && 'x86' || 'x64' }}
+
+    - name: Configure CMake
+      shell: pwsh
+      run: |
+        cmake -S . -B build `
+          -A${{ matrix.arch }} `
+          -Dfoobar2000sdk="${{ github.workspace }}\sdk"
+
+    - name: Build foo_cuefixer
+      shell: pwsh
+      run: |
+        cmake --build build --config ${{ matrix.config }}
+
+    - name: Upload DLL
+      uses: actions/upload-artifact@v4
+      with:
+        name: foo_cuefixer-${{ matrix.arch }}
+        path: build/src/${{ matrix.config }}/foo_cuefixer.dll
+
+  pack:
+    needs: build
+    runs-on: windows-latest
+
+    steps:
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Prepare pack directory
+      shell: cmd
+      run: |
+        mkdir pack
+        mkdir pack\x64
+        copy artifacts\foo_cuefixer-Win32\foo_cuefixer.dll pack\
+        copy artifacts\foo_cuefixer-x64\foo_cuefixer.dll pack\x64\
+
+    - name: Create fb2k-component
+      run: |
+        Compress-Archive -Path pack\* -DestinationPath foo_cuefixer.fb2k-component
+
+    - name: Upload fb2k-component
+      uses: actions/upload-artifact@v4
+      with:
+        name: fb2k-component
+        path: foo_cuefixer.fb2k-component
