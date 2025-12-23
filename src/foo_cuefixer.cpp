@@ -1,13 +1,11 @@
 #include <SDK/foobar2000.h>
 
-DECLARE_COMPONENT_VERSION("CUE fixer", "1.3.3", "CUE Fixer by RevenantX");
+DECLARE_COMPONENT_VERSION("CUE 链接文件去除", "1.3.3", "CUE Fixer by RevenantX and mod by yhdsl");
 VALIDATE_COMPONENT_FILENAME("foo_cuefixer.dll");
 
 class playlist_cuefixer : public playlist_callback_static
 {
 	unsigned get_flags() override { return flag_on_items_added; }
-
-	const pfc::string PATH_START = "://";
 	
 	void on_items_added(t_size p_playlist, t_size p_start, const pfc::list_base_const_t<metadb_handle_ptr> & p_data, const bit_array & p_selection) override
 	{
@@ -22,41 +20,18 @@ class playlist_cuefixer : public playlist_callback_static
 		{
 			if (!playlistManager->playlist_get_item_handle(itemHandle, p_playlist, i))
 				continue;
-			
+
 			if (!itemHandle->get_info_ref(infoRef))
 			{
-				if (pfc::io::path::getFileExtension(itemHandle->get_path()).equals(".cue"))
-					entriesToRemove.add_item(itemHandle);
-				
 				continue;
 			}
-			
+
 			const char* refField = infoRef->info().info_get("referenced_file");
 			if (refField == nullptr)
 				continue;
 
 			const pfc::string fileDir(pfc::io::path::getParent(itemHandle->get_path()));
 			const pfc::string referencedFullPath(pfc::io::path::combine(fileDir, refField));
-			try
-			{
-				const auto index = referencedFullPath.indexOf(PATH_START);
-				if (index != SIZE_MAX)
-				{
-					const auto filePath = referencedFullPath.subString(index+PATH_START.length());
-					if (!filesystem::g_exists(filePath.c_str(), fb2k::noAbort))
-					{
-						entriesToRemove.add_item(itemHandle);
-						continue;
-					}
-				}
-			}
-			catch (exception_io &)
-			{
-				//probably malformed path from the cue file
-				entriesToRemove.add_item(itemHandle);
-				continue;
-			}
-
 			//check against added items
 			for (t_size j = 0; j < addedItemsCount; j++)
 			{
@@ -73,7 +48,7 @@ class playlist_cuefixer : public playlist_callback_static
 			const auto lock_filter_mask = playlistManager->playlist_lock_get_filter_mask(p_playlist);
 			if (lock_filter_mask & playlist_lock::filter_remove)
 			{
-				console::print("CUEFIXER: playlist locked");
+				console::print("CUEFIXER: 播放列表被锁定");
 				return;
 			}
 			bit_array_bittable table(playlistManager->playlist_get_item_count(p_playlist));
